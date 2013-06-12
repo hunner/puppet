@@ -106,7 +106,44 @@ class Puppet::Parser::Compiler
 
     fail_on_unevaluated
 
+    if Puppet[:debug]
+      vars = { 'scopes' => fullscope(@topscope) }
+      res = Puppet::Parser::Resource.new('class','debug', :scope => @topscope)
+      res[:scopes] = vars['scopes']
+      @catalog.add_resource(res)
+      require'pry';binding.pry
+    end
+
     @catalog
+  end
+
+  def fullscope(scope)
+    scopehash = Hash.new { Hash.new }
+    scope.instance_variable_get(:@class_scopes).each do |class_name,class_scope|
+      if inherited_scope = class_scope.inherited_scope
+        scopehash = merge_recursively(getscope(class_scope).inject(
+          {'variables' => class_scope.to_hash(false)}
+        ) do |hash,key|
+          { key => hash }
+        end, scopehash)
+      else
+        scopehash[class_name] = Hash.new
+        scopehash[class_name]['variables'] = class_scope.to_hash(false)
+      end
+    end
+    scopehash
+  end
+
+  def merge_recursively(a, b)
+    a.merge(b) {|key, a_item, b_item| merge_recursively(a_item, b_item) }
+  end
+
+  def getscope(class_scope)
+    if inherited_scope = class_scope.inherited_scope
+      [class_scope['name'], 'scopes', getscope(inherited_scope)].flatten
+    else
+      class_scope['name']
+    end
   end
 
   def_delegator :@collections, :delete, :delete_collection
