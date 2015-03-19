@@ -4,6 +4,7 @@ require 'puppet/provider/mount'
 fstab = nil
 case Facter.value(:osfamily)
 when "Solaris"; fstab = "/etc/vfstab"
+when "AIX"; fstab = "/etc/filesystems"
 else
   fstab = "/etc/fstab"
 end
@@ -36,7 +37,79 @@ Puppet::Type.type(:mount).provide(
   field_pattern = '(\s*(?>\S+))'
   text_line :incomplete, :match => /^(?!#{field_pattern}{#{mandatory_fields.length}})/
 
-  record_line self.name, :fields => @fields, :separator => /\s+/, :joiner => "\t", :optional => optional_fields
+  case Facter.value(:osfamily)
+  when "AIX"
+    # The only field that is actually ordered is :name. See `man filesystems` on AIX
+    @fields = [
+      :name,
+      :account,
+      :boot,
+      :check,
+      :dev,
+      :free,
+      :mount,
+      :nodename, #Eventually mapped to :device
+      :options,
+      :size,
+      :type,
+      :vfs,
+      :vol,
+      :log,
+    ]
+    self.line_separator = "\n\n"
+    record_line self.name,
+      :fields    => @fields,
+      :separator => /\n/,
+      #:joiner    => "\n\t",
+      #:optional  => optional_fields,
+      :block_eval => :instance do
+        def post_parse(result)
+          property_map = {
+            :dev      => :device,
+            :nodename => :device,
+            :options  => :options,
+            :vfs      => :fstype,
+          }
+          # Result is modified in-place instead of being returned; icky!
+          memo = result.dup
+          result.clear
+          options = Array.new
+          memo.each do |k,v|
+            if k == :name
+              result[:name] = v.sub(%r{:$},'')
+            elsif k != :record_type and v != :absent
+              attr_name, attr_value = v.split("=").map(&:strip)
+              # These filesystem attributes have no mount resource simile, so
+              # are added to the "options" property
+              if [
+                :account,
+                :boot,
+                :check,
+                :free,
+                :mount,
+                :size,
+                :type,
+                :vol,
+                :log,
+              ].include?(attr_name)
+                options << "#{attr_name}=#{attr_value}"
+              else
+                result[property_map[attr_name.to_sym]] = attr_value
+              end
+            end
+          end
+          result[:record_type] = memo[:record_type]
+        end
+        def pre_gen(result)
+          require'pry';binding.pry
+        end
+        def to_line(result)
+          require'pry';binding.pry
+        end
+      end
+  else
+    record_line self.name, :fields => @fields, :separator => /\s+/, :joiner => "\t", :optional => optional_fields
+  end
 
   # Every entry in fstab is :unmounted until we can prove different
   def self.prefetch_hook(target_records)
